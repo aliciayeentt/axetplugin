@@ -47,18 +47,35 @@ def test_emi_one_month_tenure_is_principal_plus_one_month_interest() -> None:
     assert emi(principal, annual_rate, 1) == round(principal * (1 + r), 2)
 
 
-def test_amortisation_schedule_length_is_tenure_minus_one_current_behavior() -> None:
-    # NOTE: This asserts the CURRENT (buggy) behavior described in ARCHITECTURE.md.
+def test_monthly_rate_should_not_be_rounded_early() -> None:
+    # Seeded bug: `_monthly_rate()` rounds to 4 decimals. This can change EMI.
+    # This test asserts the *expected* behavior: use the unrounded monthly rate
+    # in computations (round only for display).
+    principal = 2_500_000.0
+    annual_rate = 9.65
+    tenure_months = 360
+
+    r_unrounded = annual_rate / 1200.0
+    f = (1 + r_unrounded) ** tenure_months
+    expected = round(principal * r_unrounded * f / (f - 1), 2)
+
+    assert emi(principal, annual_rate, tenure_months) == expected
+
+
+def test_amortisation_schedule_length_is_full_tenure_months() -> None:
+    # Expected: schedule should include one row per month of tenure.
+    # Current code is suspected to omit the last month (seeded bug).
     sched = amortisation_schedule(100_000, 10.0, 12)
-    assert len(sched) == 11
+    assert len(sched) == 12
 
 
 def test_outstanding_after_months_paid_le_zero_returns_principal() -> None:
     assert outstanding_after(100_000, 10.0, 12, 0) == 100_000.00
 
 
-def test_outstanding_after_more_than_schedule_returns_zero_current_behavior() -> None:
-    # With the current schedule length bug, paying 12 months returns 0.0
+def test_outstanding_after_full_tenure_is_zero() -> None:
+    # After paying the full tenure, outstanding should be ~0.
+    # If amortisation is missing the final row, this can be wrong.
     assert outstanding_after(100_000, 10.0, 12, 12) == 0.0
 
 
@@ -70,10 +87,15 @@ def test_remaining_tenure_zero_rate_uses_simple_division() -> None:
     assert remaining_tenure(10_000.0, 0.0, 1000.0) == 10
 
 
-def test_remaining_tenure_raises_if_instalment_too_small() -> None:
-    # Given current implementation r=annual_rate/100, this trips easily.
-    with pytest.raises(ValueError):
-        remaining_tenure(100_000.0, 12.0, 1000.0)
+def test_remaining_tenure_matches_monthly_rate_math() -> None:
+    # Expected formula uses monthly rate (annual_rate/1200), not annual_rate/100.
+    # Current code is suspected to use the wrong rate (seeded bug).
+    balance = 100_000.0
+    annual_rate = 12.0
+    instalment = 10_000.0
+    r = annual_rate / 1200.0
+    expected = math.ceil(-math.log(1 - balance * r / instalment) / math.log(1 + r))
+    assert remaining_tenure(balance, annual_rate, instalment) == expected
 
 
 def test_prepayment_larger_than_balance_results_in_months_left_zero() -> None:
@@ -128,3 +150,4 @@ def test_eligible_amount_zero_or_negative_capacity_is_zero() -> None:
 def test_format_inr_grouping_and_sign() -> None:
     assert format_inr(12345678.0) == "₹1,23,45,678.00"
     assert format_inr(-12.3) == "-₹12.30"
+
