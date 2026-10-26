@@ -164,7 +164,7 @@ def remaining_tenure(balance: float, annual_rate: float, instalment: float) -> i
         The code currently uses `annual_rate/100` as `r` in the annuity formula (annual
         decimal rate), not the monthly rate. This can yield incorrect results.
     """
-    r = annual_rate / 100
+    r = annual_rate / 1200
     if balance <= 0:
         return 0
     if r == 0:
