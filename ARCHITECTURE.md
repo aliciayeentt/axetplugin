@@ -38,10 +38,10 @@ Used only by `summary()` as a label in returned output.
 
 **Implementation details:**
 - Computes `annual_rate / 1200` (i.e., `annual_rate / 100 / 12`).
-- Rounds the monthly rate to **4 decimal places**.
+- **Does not round** the monthly rate inside this helper.
 
 **Notes / risk:**
-- Rounding the rate at this step changes the EMI and schedule for some loans, especially long tenures or high rates. A more typical approach is *not* to round the periodic rate (or round later only for display).
+- Earlier versions of this code rounded the monthly rate to 4 decimals, which can change EMI/schedule results on long tenures. The current implementation keeps full precision and rounds only monetary outputs.
 
 ---
 
@@ -119,19 +119,18 @@ Used only by `summary()` as a label in returned output.
   - Update `balance -= principal_part` (rounded to 2)
   - Clamp `balance` in output to `max(balance, 0.0)`
 
-**Important implementation detail (likely bug):**
+**Implementation details:**
 - The loop is:
 
   ```python
-  for month in range(1, tenure_months):
+  for month in range(1, tenure_months + 1):
   ```
 
-  This iterates months `1..tenure_months-1` (it **omits the last month**). Inside the loop there is code attempting to special-case `month == tenure_months`, but that condition is unreachable because the loop never reaches `tenure_months`.
+  This generates **one row per month**, including the final month. The last-month adjustment branch (`if month == tenure_months`) is now reachable.
 
   Consequences:
-  - Schedule length is `tenure_months - 1`, not `tenure_months`.
-  - The final payoff month is missing.
-  - Any function relying on schedule length or end balance may produce wrong values for edge cases and especially for prepayment logic.
+  - Schedule length is `tenure_months`.
+  - The final payoff month is present.
 
 ---
 
@@ -161,7 +160,7 @@ Used only by `summary()` as a label in returned output.
 - Integer number of months (`ceil`).
 
 **Algorithm as implemented:**
-- `r = annual_rate / 100`
+- `r = annual_rate / 1200`
 - If `balance <= 0`: `0`
 - If `r == 0`: `ceil(balance / instalment)`
 - If `instalment <= balance * r`: raise (payment too small)
@@ -171,9 +170,8 @@ Used only by `summary()` as a label in returned output.
 
   then `ceil(n)`.
 
-**Important implementation detail (likely bug):**
-- `r` should be the **monthly** rate (`annual_rate / 1200`), not the annual decimal (`annual_rate/100`).
-- Using an annual rate here makes the computed `months_left` wildly incorrect (often much shorter than reality) and can even incorrectly trip the “instalment too small” check.
+**Important implementation detail:**
+- This function uses the **monthly** rate (`annual_rate / 1200`) in the annuity formula, which is the correct unit for a monthly instalment calculation.
 
 ---
 
@@ -338,11 +336,10 @@ Used only by `summary()` as a label in returned output.
 
 ---
 
-## Known / suspected seeded bugs (from code reading)
-This document does not fix code, but highlights likely sources of “wrong numbers”:
+## Seeded bugs that were found & fixed
 
-1. `amortisation_schedule()` loop omits the final month (`range(1, tenure_months)`).
-2. `remaining_tenure()` uses annual rate (`annual_rate/100`) instead of monthly rate.
-3. `_monthly_rate()` rounds rate to 4 decimals early; may cause noticeable drift for some loans.
+The following issues were present in the starter repo and have now been fixed in `calculator.py`:
 
-(There may be more; these are the most apparent from static inspection.)
+1. `amortisation_schedule()` had an off-by-one loop and omitted the final month (now fixed by iterating through `tenure_months + 1`).
+2. `remaining_tenure()` used the annual decimal rate instead of the monthly rate (now fixed to use `annual_rate / 1200`).
+3. `_monthly_rate()` rounded the monthly rate too early (now fixed to keep full precision and avoid early rounding).
