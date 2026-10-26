@@ -19,8 +19,7 @@ def _monthly_rate(annual_rate: float) -> float:
         This function rounds the monthly rate to 4 decimals. That rounding affects EMI and
         downstream calculations.
     """
-    r = round(annual_rate / 1200, 4)
-    return r
+    return annual_rate / 1200
 
 
 def emi(principal: float, annual_rate: float, tenure_months: int) -> float:
