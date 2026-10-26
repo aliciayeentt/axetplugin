@@ -1,8 +1,14 @@
 import math
+from datetime import date
 
 import pytest
 
 from loan_calc.calculator import (
+    AmountError,
+    InstalmentTooSmallError,
+    RateError,
+    TenureError,
+    ValidationError,
     amortisation_schedule,
     compare_offers,
     eligible_amount,
@@ -11,18 +17,24 @@ from loan_calc.calculator import (
     outstanding_after,
     prepayment_savings,
     remaining_tenure,
+    summary,
     total_interest,
     total_payment,
 )
 
 
 def test_emi_rejects_non_positive_principal() -> None:
+    # Backwards compatible: custom exceptions subclass ValueError.
     with pytest.raises(ValueError):
+        emi(0, 10.0, 12)
+    with pytest.raises(AmountError):
         emi(0, 10.0, 12)
 
 
 def test_emi_rejects_non_positive_tenure() -> None:
     with pytest.raises(ValueError):
+        emi(100_000, 10.0, 0)
+    with pytest.raises(TenureError):
         emi(100_000, 10.0, 0)
 
 
@@ -37,6 +49,61 @@ def test_total_payment_zero_interest_equals_principal() -> None:
 
 def test_total_interest_zero_interest_is_zero() -> None:
     assert total_interest(120_000, 0.0, 12) == 0.00
+
+
+def test_emi_rejects_negative_rate() -> None:
+    with pytest.raises(RateError):
+        emi(100_000, -0.1, 12)
+
+
+def test_outstanding_after_rejects_months_paid_gt_tenure() -> None:
+    with pytest.raises(TenureError):
+        outstanding_after(100_000, 10.0, 12, 13)
+
+
+def test_remaining_tenure_rejects_non_positive_instalment() -> None:
+    with pytest.raises(AmountError):
+        remaining_tenure(100_000, 10.0, 0.0)
+
+
+def test_remaining_tenure_raises_custom_instalment_too_small() -> None:
+    with pytest.raises(InstalmentTooSmallError):
+        remaining_tenure(100_000, 12.0, 10.0)  # far too small
+
+
+def test_prepayment_savings_validates_inputs() -> None:
+    with pytest.raises(TenureError):
+        prepayment_savings(100_000, 10.0, 12, prepay_month=0, prepay_amount=1000)
+    with pytest.raises(AmountError):
+        prepayment_savings(100_000, 10.0, 12, prepay_month=1, prepay_amount=-1)
+
+
+def test_eligible_amount_validates_foir_range() -> None:
+    with pytest.raises(ValidationError):
+        eligible_amount(100_000, 0, 10.0, 12, foir=1.5)
+
+
+def test_format_inr_rejects_non_numeric() -> None:
+    with pytest.raises(ValidationError):
+        format_inr("not-a-number")  # type: ignore[arg-type]
+
+
+def test_schedule_to_csv_rejects_empty_path(tmp_path) -> None:
+    from loan_calc.calculator import schedule_to_csv
+    with pytest.raises(ValidationError):
+        schedule_to_csv([], "")
+    # sanity: works with a valid path
+    p = tmp_path / "sched.csv"
+    schedule_to_csv([], str(p))
+    assert p.exists()
+
+
+def test_summary_validates_start_type() -> None:
+    with pytest.raises(ValidationError):
+        summary(100_000, 10.0, 12, start="2026-01-01")  # type: ignore[arg-type]
+    # sanity: accepts date
+    out = summary(100_000, 10.0, 12, start=date(2026, 1, 1))
+    assert "emi" in out
 
 
 def test_emi_one_month_tenure_is_principal_plus_one_month_interest() -> None:
@@ -150,4 +217,3 @@ def test_eligible_amount_zero_or_negative_capacity_is_zero() -> None:
 def test_format_inr_grouping_and_sign() -> None:
     assert format_inr(12345678.0) == "₹1,23,45,678.00"
     assert format_inr(-12.3) == "-₹12.30"
-
