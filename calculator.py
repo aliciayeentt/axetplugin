@@ -3,6 +3,33 @@ from datetime import date
 from typing import Any, Mapping, Sequence
 
 
+# ----------------------------
+# Exceptions (backwards compatible: all subclass ValueError)
+# ----------------------------
+class LoanCalcError(ValueError):
+    """Base error type for this module (subclasses ValueError for compatibility)."""
+
+
+class ValidationError(LoanCalcError):
+    """Raised when one or more inputs are invalid."""
+
+
+class RateError(ValidationError):
+    """Raised for invalid interest rate inputs."""
+
+
+class TenureError(ValidationError):
+    """Raised for invalid tenure inputs (e.g., non-positive months)."""
+
+
+class AmountError(ValidationError):
+    """Raised for invalid amount inputs (e.g., non-positive principal)."""
+
+
+class InstalmentTooSmallError(ValidationError):
+    """Raised when an instalment cannot amortise the balance under the given rate."""
+
+
 DEFAULT_CURRENCY = "INR"
 
 
@@ -37,9 +64,11 @@ def emi(principal: float, annual_rate: float, tenure_months: int) -> float:
         ValueError: If principal <= 0 or tenure_months <= 0.
     """
     if tenure_months <= 0:
-        raise ValueError("tenure must be positive")
+        raise TenureError("tenure must be positive")
     if principal <= 0:
-        raise ValueError("principal must be positive")
+        raise AmountError("principal must be positive")
+    if annual_rate < 0:
+        raise RateError("annual_rate must be >= 0")
     r = _monthly_rate(annual_rate)
     if r == 0:
         return round(principal / tenure_months, 2)
@@ -98,6 +127,12 @@ def amortisation_schedule(
         The current implementation loops `range(1, tenure_months)` which omits the final
         month. As a result the last payment month is not present in the returned schedule.
     """
+    if annual_rate < 0:
+        raise RateError("annual_rate must be >= 0")
+    if tenure_months <= 0:
+        raise TenureError("tenure must be positive")
+    if principal <= 0:
+        raise AmountError("principal must be positive")
     r = _monthly_rate(annual_rate)
     instalment = emi(principal, annual_rate, tenure_months)
     balance = principal
@@ -137,8 +172,16 @@ def outstanding_after(
     Returns:
         Remaining balance (rounded to 2 decimals in the schedule calculation).
     """
+    if annual_rate < 0:
+        raise RateError("annual_rate must be >= 0")
+    if tenure_months <= 0:
+        raise TenureError("tenure must be positive")
+    if principal <= 0:
+        raise AmountError("principal must be positive")
     if months_paid <= 0:
         return round(principal, 2)
+    if months_paid > tenure_months:
+        raise TenureError("months_paid cannot exceed tenure_months")
     sched = amortisation_schedule(principal, annual_rate, tenure_months)
     if months_paid > len(sched):
         return 0.0
@@ -163,13 +206,17 @@ def remaining_tenure(balance: float, annual_rate: float, instalment: float) -> i
         The code currently uses `annual_rate/100` as `r` in the annuity formula (annual
         decimal rate), not the monthly rate. This can yield incorrect results.
     """
+    if annual_rate < 0:
+        raise RateError("annual_rate must be >= 0")
+    if instalment <= 0:
+        raise AmountError("instalment must be positive")
     r = annual_rate / 1200
     if balance <= 0:
         return 0
     if r == 0:
         return math.ceil(balance / instalment)
     if instalment <= balance * r:
-        raise ValueError("instalment too small to repay the loan")
+        raise InstalmentTooSmallError("instalment too small to repay the loan")
     n = -math.log(1 - balance * r / instalment) / math.log(1 + r)
     return math.ceil(n)
 
@@ -203,6 +250,16 @@ def prepayment_savings(
         Results depend on `amortisation_schedule()` and `remaining_tenure()`. Bugs or rounding
         behavior in those functions directly affect the computed savings.
     """
+    if annual_rate < 0:
+        raise RateError("annual_rate must be >= 0")
+    if tenure_months <= 0:
+        raise TenureError("tenure must be positive")
+    if principal <= 0:
+        raise AmountError("principal must be positive")
+    if prepay_month <= 0 or prepay_month > tenure_months:
+        raise TenureError("prepay_month must be between 1 and tenure_months")
+    if prepay_amount < 0:
+        raise AmountError("prepay_amount must be >= 0")
     instalment = emi(principal, annual_rate, tenure_months)
     sched = amortisation_schedule(principal, annual_rate, tenure_months)
     balance = float(sched[prepay_month - 1]["balance"])
@@ -242,8 +299,14 @@ def compare_offers(
         List of offer summaries sorted by `total_cost` ascending. `total_cost` is interest + fee
         (principal repayment is excluded).
     """
+    if principal <= 0:
+        raise AmountError("principal must be positive")
     out: list[dict[str, float]] = []
     for o in offers:
+        if float(o["rate"]) < 0:
+            raise RateError("offer rate must be >= 0")
+        if int(o["tenure"]) <= 0:
+            raise TenureError("offer tenure must be positive")
         e = emi(principal, float(o["rate"]), int(o["tenure"]))
         ti = total_interest(principal, float(o["rate"]), int(o["tenure"]))
         fee = float(o.get("processing_fee_pct", 0)) * principal / 100
@@ -283,6 +346,16 @@ def eligible_amount(
         Eligible principal amount (rounded to 2 decimals). Returns 0.0 if there is no
         disposable EMI capacity.
     """
+    if annual_rate < 0:
+        raise RateError("annual_rate must be >= 0")
+    if tenure_months <= 0:
+        raise TenureError("tenure must be positive")
+    if foir < 0 or foir > 1:
+        raise ValidationError("foir must be between 0 and 1")
+    if monthly_income < 0:
+        raise AmountError("monthly_income must be >= 0")
+    if existing_emis < 0:
+        raise AmountError("existing_emis must be >= 0")
     available = monthly_income * foir - existing_emis
     if available <= 0:
         return 0.0
@@ -305,6 +378,8 @@ def format_inr(amount: float) -> str:
     Notes:
         This is a pure formatting helper; it does not consult locale settings.
     """
+    if not isinstance(amount, (int, float)):
+        raise ValidationError("amount must be a number")
     neg = amount < 0
     amount = abs(round(amount, 2))
     whole, frac = f"{amount:.2f}".split(".")
@@ -330,6 +405,8 @@ def schedule_to_csv(rows: Sequence[Mapping[str, Any]], path: str) -> None:
     Returns:
         None.
     """
+    if not path:
+        raise ValidationError("path must be a non-empty string")
     with open(path, "w") as fh:
         fh.write("month,emi,interest,principal,balance\n")
         for r in rows:
@@ -352,6 +429,8 @@ def summary(
     Returns:
         A dict of display-friendly fields (amounts are formatted with `format_inr()`).
     """
+    if start is not None and not isinstance(start, date):
+        raise ValidationError("start must be a datetime.date or None")
     start = start or date.today()
     e = emi(principal, annual_rate, tenure_months)
     end_year = start.year + (start.month - 1 + tenure_months) // 12
